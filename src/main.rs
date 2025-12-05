@@ -1,15 +1,13 @@
-use std::io::BufRead;
-use std::rc::Rc;
 
-fn consume_digits(input:&[u8])->(u64,&[u8]){
-    let mut sum = 0u64;
+fn consume_digits(input:&[u8])->(i64,&[u8]){
+    let mut sum = 0i64;
 
     for(i,b) in input.iter().enumerate(){
         let d = *b as i8-b'0' as i8;
         if d<0 || d>9{
             return (sum,&input[i..])
         }
-        sum=sum*10+d as u64;
+        sum=sum*10+d as i64;
     }
     (sum,&[])
 }
@@ -21,7 +19,7 @@ fn consume_dash(input:&[u8])->&[u8]{
     &input[1..]
 }
 
-fn parse_pair(input:&[u8])->(u64,u64,&[u8]){
+fn parse_pair(input:&[u8])->(i64,i64,&[u8]){
     let (first,rest) = consume_digits(input);
     let rest = consume_dash(rest);
     let (second,rest) = consume_digits(rest);
@@ -42,6 +40,9 @@ fn parse_start(mut input:&[u8])->(&[u8],PNode){
     loop{
         let (start,end,rest) = parse_pair(input);
         ans = insert_to_range(ans,start,end);
+        println!("after inserting [{start} {end}]");
+        println!("{ans:#?}");
+
         let (rest,stop) = check_spaces(rest);
         input=rest;
         if stop {
@@ -50,14 +51,15 @@ fn parse_start(mut input:&[u8])->(&[u8],PNode){
     }
 }
 
+#[derive(Debug)]
 pub struct Node{
-    me:(u64,u64),
+    me:(i64,i64),
     less:Option<Box<Node>>,
     more:Option<Box<Node>>,
 }
 
 impl Node{
-    pub fn new_empty(me:(u64,u64))->Box<Self>{
+    pub fn new_empty(me:(i64,i64))->Box<Self>{
         Box::new(Self{
             me,less:None,more:None
         })
@@ -68,7 +70,7 @@ impl Node{
 
 type PNode = Option<Box<Node>>;
 
-pub fn insert_to_range(op:PNode,start:u64,end:u64)->PNode{
+pub fn insert_to_range(op:PNode,start:i64,end:i64)->PNode{
     let Some(mut cur) = op else {
         return Some(Node::new_empty((start,end)))
     };
@@ -84,20 +86,115 @@ pub fn insert_to_range(op:PNode,start:u64,end:u64)->PNode{
     }
 
 
-    //we could do better here but meh
-
     if start<=cur.me.0 {
+        // println!("growing {:?} to [{start} {}]",cur.me,cur.me.1);
         cur.me.0=start;
+        merge_small(&mut cur.me,&mut cur.less);
     }
 
     if cur.me.1<=end {
+        // println!("growing {:?} to [{} {end}]",cur.me,cur.me.0);
+
         cur.me.1=end;
+        merge_big(&mut cur.me,&mut cur.more);
     }
 
     Some(cur)
 }
 
-pub fn tree_contains(op:&PNode,x:u64)->bool{
+pub fn find_bigest(child_op:&mut PNode)->&mut PNode{
+    let p : *mut _ = child_op;
+    let Some(node) = (unsafe{&mut*p}) else {
+        return child_op;
+    };
+
+    if node.more.is_none() {
+        return unsafe{&mut*p};
+    }
+    
+    find_bigest(&mut node.more)
+
+}
+
+pub fn find_smallest(child_op:&mut PNode)->&mut PNode{
+    let p : *mut _=  child_op;
+    let Some(node) = (unsafe{&mut*p}) else {
+        return child_op;
+    };
+
+    if node.less.is_none(){
+        return unsafe{&mut*p};
+    }
+
+    find_smallest(&mut node.less)
+
+}
+
+pub fn merge_small(range:&mut (i64,i64),child_op:&mut PNode){
+    let Some(child) = child_op else {
+        return;
+    };
+
+    merge_small(range,&mut child.more);
+    if child.me.1>=range.0 {
+        range.0=child.me.0;
+        //fine not removing yet
+        merge_small(range,&mut child.less);
+
+        //now take
+        let left_take = find_bigest(&mut child.less);
+        if let Some(take_node) = left_take {
+            child.me = take_node.me;
+            let t  = take_node.less.take();
+            *left_take=t;
+            return;
+        }
+
+        let right_take = find_smallest(&mut child.more);
+        if let Some(take_node) = right_take {
+            child.me = take_node.me;
+            let t  = take_node.more.take();
+            *right_take=t;
+            return;
+        }
+
+        child_op.take();
+    }
+}
+
+pub fn merge_big(range:&mut (i64,i64),child_op:&mut PNode){
+    let Some(child) = child_op else {
+        return;
+    };
+
+    merge_big(range,&mut child.less);
+    if child.me.0<=range.1 {
+        range.1=child.me.1;
+        //fine not removing yet
+        merge_big(range,&mut child.more);
+
+        //now take
+        let left_take = find_bigest(&mut child.less);
+        if let Some(take_node) = left_take {
+            child.me = take_node.me;
+            let t  = take_node.less.take();
+            *left_take=t;
+            return;
+        }
+
+        let right_take = find_smallest(&mut child.more);
+        if let Some(take_node) = right_take {
+            child.me = take_node.me;
+            let t  = take_node.more.take();
+            *right_take=t;
+            return;
+        }
+
+        child_op.take();
+    }
+}
+
+pub fn tree_contains(op:&PNode,x:i64)->bool{
     let Some(node) = op else {
         return false;
     };
@@ -111,6 +208,22 @@ pub fn tree_contains(op:&PNode,x:u64)->bool{
     }
 
     true
+}
+
+pub fn tree_len(op:&PNode)->i64{
+    let Some(node) = op else{
+        return 0;
+    };
+
+
+    let ans =
+    (node.me.1-node.me.0+1)+
+    tree_len(&node.less)+
+    tree_len(&node.more);
+
+    println!("in {:?} returning {ans}",node.me.0..=node.me.1);
+    ans
+
 }
 
 fn main() {
@@ -134,6 +247,8 @@ fn main() {
         }
     }
 
-    println!("ans is {ans}")
+    println!("tree is\n{tree:#?}");
+    println!("part1 is {ans}");
+    println!("part2 is {}",tree_len(&tree))
 
 }
